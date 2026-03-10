@@ -1,0 +1,12 @@
+node_modules/
+.env
+backend/.env
+frontend/.env
+dist/
+build/
+.DS_Store
+*.log
+backend/uploads/
+tiny.png
+tiny-upload.png
+{backend/
