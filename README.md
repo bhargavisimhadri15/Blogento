@@ -123,7 +123,7 @@ docker-compose up --build
 
 ### Option A (Recommended): Single Vercel Project (Frontend + /api)
 
-1. In Vercel, import the repo and set **Root Directory** to `blogapp/`.
+1. In Vercel, import the repo and keep **Root Directory** as the repository root (`.`).
 2. Add backend env vars (Project → Settings → Environment Variables):
    - `MONGO_URI`
    - `JWT_SECRET`
