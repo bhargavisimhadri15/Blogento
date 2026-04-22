@@ -79,6 +79,7 @@ const writeImageToUploads = async (req, file) => {
 };
 
 const canUseCloudinary = () => Boolean(process.env.CLOUD_NAME && process.env.CLOUD_API_KEY && process.env.CLOUD_API_SECRET);
+const isVercel = () => Boolean(process.env.VERCEL);
 
 const uploadToCloudinary = (buffer, folder) => {
   return new Promise((resolve, reject) => {
@@ -116,6 +117,12 @@ router.post('/upload-image', protect, upload.single('image'), async (req, res) =
       } catch (cloudErr) {
         console.error('CLOUDINARY UPLOAD ERROR:', cloudErr?.message || cloudErr);
       }
+    }
+
+    if (isVercel()) {
+      return res.status(503).json({
+        message: 'Image upload is not configured for Vercel. Set CLOUD_NAME, CLOUD_API_KEY, CLOUD_API_SECRET (Cloudinary).',
+      });
     }
 
     const local = await writeImageToUploads(req, req.file);
