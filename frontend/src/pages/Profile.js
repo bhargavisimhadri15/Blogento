@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { usersAPI } from '../utils/api';
+import { authAPI, postsAPI, usersAPI } from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 import { format } from 'date-fns';
+import CoverImage from '../components/CoverImage';
+import toast from 'react-hot-toast';
 
 export default function Profile() {
   const { username } = useParams();
+  const { user: authUser, updateUser } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -32,6 +37,33 @@ export default function Profile() {
   );
 
   const { user, posts } = data;
+  const displayUsername = (user.username || 'User').trim() || 'User';
+  const profileInitial = displayUsername.charAt(0).toUpperCase() || '?';
+  const isMe = Boolean(authUser?.username && authUser.username === user.username);
+
+  const handleAvatarUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingAvatar(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('folder', 'avatars');
+
+      const { data: upload } = await postsAPI.uploadImage(formData);
+      await authAPI.updateProfile({ avatar: upload.url });
+
+      updateUser({ avatar: upload.url });
+      setData(prev => (prev ? { ...prev, user: { ...prev.user, avatar: upload.url } } : prev));
+      toast.success('Profile photo updated');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update profile photo');
+    } finally {
+      setUploadingAvatar(false);
+      e.target.value = '';
+    }
+  };
 
   const formatDate = (dateStr) => {
     try {
@@ -61,12 +93,27 @@ export default function Profile() {
         <div className="profile-header">
           <div className="profile-avatar">
             {user.avatar
-              ? <img src={user.avatar} alt={user.username} style={{ width:'100%', height:'100%', borderRadius:'50%', objectFit:'cover' }} />
-              : user.username.charAt(0).toUpperCase()
+              ? <img src={user.avatar} alt={displayUsername} style={{ width:'100%', height:'100%', borderRadius:'50%', objectFit:'cover' }} />
+              : profileInitial
             }
           </div>
           <div>
-            <h1 style={{ fontSize:'1.8rem' }}>{user.username}</h1>
+            <h1 style={{ fontSize:'1.8rem' }}>{displayUsername}</h1>
+            {isMe && (
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                <label className="btn btn-secondary" style={{ margin: 0, cursor: uploadingAvatar ? 'not-allowed' : 'pointer' }}>
+                  {uploadingAvatar ? 'Uploading...' : 'Change photo'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarUpload}
+                    disabled={uploadingAvatar}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                <Link to="/settings" className="btn btn-secondary">Edit profile</Link>
+              </div>
+            )}
             {user.bio && (
               <p style={{ color:'var(--text-muted)', marginTop:'0.4rem' }}>{user.bio}</p>
             )}
@@ -76,7 +123,7 @@ export default function Profile() {
           </div>
         </div>
 
-        <h2 style={{ marginBottom:'1.5rem' }}>Posts by {user.username}</h2>
+        <h2 style={{ marginBottom:'1.5rem' }}>Posts by {displayUsername}</h2>
 
         {posts.length === 0 ? (
           <div className="empty-state">
@@ -85,17 +132,14 @@ export default function Profile() {
         ) : (
           <div className="posts-grid">
             {posts.map(post => (
-              <div key={post._id} className="card post-card">
-                <div className="post-card-img">
-                  {post.coverImage
-                    ? <img src={post.coverImage} alt={post.title} />
-                    : <span>✍️</span>
-                  }
-                </div>
-                <div className="post-card-body">
-                  <span className="post-category">{post.category}</span>
-                  <div className="post-card-title">
-                    <Link to={`/post/${post.slug || post._id}`}>{post.title}</Link>
+                <div key={post._id} className="card post-card">
+                  <div className="post-card-img">
+                    <CoverImage src={post.coverImage} alt={post.title} fallback="✍️" />
+                  </div>
+                  <div className="post-card-body">
+                    <span className="post-category">{post.category}</span>
+                    <div className="post-card-title">
+                      <Link to={`/post/${post.slug || post._id}`}>{post.title}</Link>
                   </div>
                   {post.excerpt && (
                     <p className="post-excerpt">{post.excerpt}</p>
@@ -104,9 +148,12 @@ export default function Profile() {
                     <span style={{ fontSize:'0.8rem', color:'var(--text-muted)' }}>
                       {formatPostDate(post.createdAt)}
                     </span>
-                    <span style={{ fontSize:'0.8rem', color:'var(--text-muted)' }}>
-                      👁 {post.views || 0} · 💬 {post.commentCount || 0}
-                    </span>
+                    <div className="post-card-meta" aria-label="post meta">
+                      <span className="post-card-meta-item">👁 {post.views || 0}</span>
+                      <span className="post-card-meta-item post-card-meta-comments">
+                        💬 {post.commentCount || 0}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>

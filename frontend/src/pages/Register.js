@@ -15,6 +15,10 @@ export default function Register() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (!/^[a-zA-Z0-9_]+$/.test(form.username.trim())) {
+      setError('Username can only contain letters, numbers, and underscores');
+      return;
+    }
     if (form.password.length < 6) {
       setError('Password must be at least 6 characters');
       return;
@@ -39,8 +43,19 @@ export default function Register() {
         {error && <div className="alert alert-error">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label>Username</label>
-            <input className="form-control" name="username" value={form.username} onChange={handleChange} required minLength={3} maxLength={30} placeholder="e.g. john_doe" />
+            <label>Username <span style={{color:'var(--text-muted)',fontWeight:400}}>(letters, numbers, underscore)</span></label>
+            <input
+              className="form-control"
+              name="username"
+              value={form.username}
+              onChange={handleChange}
+              required
+              minLength={3}
+              maxLength={30}
+              pattern="[A-Za-z0-9_]+"
+              title="Use only letters, numbers, and underscores"
+              placeholder="e.g. john_doe"
+            />
           </div>
           <div className="form-group">
             <label>Email address</label>

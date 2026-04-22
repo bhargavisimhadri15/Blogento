@@ -34,7 +34,6 @@ export default function Dashboard() {
   const drafts = posts.filter(p => p.status === 'draft');
   const totalViews = posts.reduce((sum, p) => sum + (p.views || 0), 0);
   const totalLikes = posts.reduce((sum, p) => sum + (p.likes?.length || 0), 0);
-  const isAdmin = user?.role === 'admin';
 
   return (
     <div className="page">
@@ -72,9 +71,6 @@ export default function Dashboard() {
 
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem'}}>
           <h2 style={{fontSize:'1.2rem'}}>Your Posts</h2>
-          <div style={{display:'flex',gap:'0.5rem'}}>
-            <Link to="/settings" className="btn btn-secondary btn-sm">⚙️ Settings</Link>
-          </div>
         </div>
 
         {loading ? (
@@ -102,12 +98,10 @@ export default function Dashboard() {
                   {' '}· <span className={`badge badge-${post.status}`}>{post.status}</span>
                 </div>
               </div>
-              {isAdmin && (
-                <div className="post-row-actions">
-                  <Link to={`/edit/${post._id}`} className="btn btn-secondary btn-sm">Edit</Link>
-                  <button className="btn btn-danger btn-sm" onClick={() => handleDelete(post._id)}>Delete</button>
-                </div>
-              )}
+              <div className="post-row-actions">
+                <Link to={`/edit/${post._id}`} className="btn btn-secondary btn-sm">Edit</Link>
+                <button className="btn btn-danger btn-sm" onClick={() => handleDelete(post._id)}>Delete</button>
+              </div>
             </div>
           ))
         )}

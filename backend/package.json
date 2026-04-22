@@ -5,6 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:lan": "set HOST=0.0.0.0&&set PORT=5000&&node server.js",
+    "seed:admin": "node createuser.js",
+    "cleanup:cover-images": "node cleanupCoverImages.js",
+    "cleanup:cover-images:apply": "node cleanupCoverImages.js --apply",
+    "reassign:orphan-posts": "node reassignOrphanPosts.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
@@ -18,6 +23,7 @@
     "mongoose": "^7.3.1",
     "morgan": "^1.10.0",
     "multer": "^2.1.1",
+    "serverless-http": "^3.2.0",
     "streamifier": "^0.1.1"
   },
   "devDependencies": {

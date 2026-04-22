@@ -1,16 +1,21 @@
 const mongoose = require('mongoose');
 
+let cachedConnection = null;
+
 const connectDB = async () => {
-  try {
-    const conn = await mongoose.connect('mongodb+srv://blog:blog123@cluster0.ywglzmz.mongodb.net/?appName=Cluster0',  {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
-  } catch (error) {
-    console.error(`❌ MongoDB connection error: ${error.message}`);
-    process.exit(1);
+  if (cachedConnection || mongoose.connection.readyState === 1) {
+    return mongoose.connection;
   }
+
+  const mongoUri = process.env.MONGO_URI;
+  if (!mongoUri) {
+    throw new Error('MONGO_URI is not set');
+  }
+
+  const conn = await mongoose.connect(mongoUri);
+  cachedConnection = conn.connection;
+  console.log(`MongoDB connected: ${conn.connection.host}`);
+  return cachedConnection;
 };
 
 module.exports = connectDB;

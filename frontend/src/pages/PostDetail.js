@@ -4,6 +4,7 @@ import { postsAPI, commentsAPI } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
+import CoverImage from '../components/CoverImage';
 
 export default function PostDetail() {
   const { id } = useParams();
@@ -66,6 +67,47 @@ export default function PostDetail() {
     }
   };
 
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fallback for older browsers / insecure contexts
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  const handleShare = async () => {
+    const url = window.location.href;
+    const title = post?.title || 'Blog post';
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, url });
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return;
+      }
+    }
+
+    const ok = await copyToClipboard(url);
+    if (ok) toast.success('Link copied');
+    else toast.error('Failed to copy link');
+  };
+
   const handleComment = async (e) => {
     e.preventDefault();
     if (!commentText.trim()) return;
@@ -126,7 +168,9 @@ export default function PostDetail() {
   if (loading) return <div className="spinner"><div className="spinner-ring"></div></div>;
   if (!post) return null;
 
-  const isAdmin = user?.role === 'admin';
+  const postAuthorId = post.author?._id || post.author;
+  const currentUserId = user?._id || user?.id;
+  const canManagePost = Boolean(currentUserId && postAuthorId && `${postAuthorId}` === `${currentUserId}`);
 
   return (
     <div className="page">
@@ -140,7 +184,10 @@ export default function PostDetail() {
             <div className="post-meta">
               <Link to={`/profile/${post.author?.username}`} className="author-mini">
                 <div className="author-mini-avatar">
-                  {post.author?.username?.charAt(0).toUpperCase()}
+                  {post.author?.avatar
+                    ? <img src={post.author.avatar} alt={post.author?.username || 'author'} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                    : post.author?.username?.charAt(0).toUpperCase()
+                  }
                 </div>
                 <strong style={{ color: 'var(--text)' }}>{post.author?.username}</strong>
               </Link>
@@ -155,7 +202,7 @@ export default function PostDetail() {
 
           {/* Cover Image */}
           {post.coverImage && (
-            <img src={post.coverImage} alt={post.title} className="post-cover" />
+            <CoverImage src={post.coverImage} alt={post.title} className="post-cover" fallback={null} />
           )}
 
           {/* Content */}
@@ -183,7 +230,16 @@ export default function PostDetail() {
               ❤️ {likesCount} {likesCount === 1 ? 'like' : 'likes'}
             </button>
 
-            {isAdmin && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleShare}
+              aria-label="Share this post"
+            >
+              🔗 Share
+            </button>
+
+            {canManagePost && (
               <>
                 <Link
                   to={`/edit/${post._id}`}
@@ -202,15 +258,18 @@ export default function PostDetail() {
           </div>
 
           {/* Author Card */}
-          <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <div className="profile-avatar" style={{ width: '50px', height: '50px', fontSize: '1.2rem' }}>
-                {post.author?.username?.charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <Link
-                  to={`/profile/${post.author?.username}`}
-                  style={{ fontWeight: 600, color: 'var(--text)' }}
+            <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                <div className="profile-avatar" style={{ width: '50px', height: '50px', fontSize: '1.2rem' }}>
+                  {post.author?.avatar
+                    ? <img src={post.author.avatar} alt={post.author?.username || 'author'} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                    : post.author?.username?.charAt(0).toUpperCase()
+                  }
+                </div>
+                <div>
+                  <Link
+                    to={`/profile/${post.author?.username}`}
+                    style={{ fontWeight: 600, color: 'var(--text)' }}
                 >
                   {post.author?.username}
                 </Link>
@@ -299,7 +358,9 @@ export default function PostDetail() {
 }
 
 function CommentBox({ comment, user, onDelete, onReply, isReply, children }) {
-  const canDelete = !!user;
+  const currentUserId = user?._id || user?.id;
+  const authorId = comment.author?._id || comment.author;
+  const canDelete = Boolean(currentUserId && authorId && `${currentUserId}` === `${authorId}`) || user?.role === 'admin';
 
   const formatCommentDate = (dateStr) => {
     try {
@@ -317,7 +378,10 @@ function CommentBox({ comment, user, onDelete, onReply, isReply, children }) {
       <div className="comment-box">
         <div className="comment-header">
           <div className="comment-avatar">
-            {comment.author?.username?.charAt(0).toUpperCase()}
+            {comment.author?.avatar
+              ? <img src={comment.author.avatar} alt={comment.author?.username || 'user'} />
+              : comment.author?.username?.charAt(0).toUpperCase()
+            }
           </div>
           <div>
             <div className="comment-author">{comment.author?.username}</div>

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { postsAPI } from '../utils/api';
 import { formatDistanceToNow } from 'date-fns';
+import CoverImage from '../components/CoverImage';
 
 const CATEGORIES = ['Technology', 'Design', 'Business', 'Lifestyle', 'Travel', 'Food', 'Health', 'Other'];
 
@@ -107,10 +108,7 @@ function PostCard({ post }) {
   return (
     <div className="card post-card">
       <div className="post-card-img">
-        {post.coverImage
-          ? <img src={post.coverImage} alt={post.title} />
-          : <span>✍️</span>
-        }
+        <CoverImage src={post.coverImage} alt={post.title} fallback="✍️" />
       </div>
       <div className="post-card-body">
         <span className="post-category">{post.category}</span>
@@ -121,13 +119,17 @@ function PostCard({ post }) {
         <div className="post-card-footer">
           <Link to={`/profile/${post.author?.username}`} className="author-mini">
             <div className="author-mini-avatar">{initials}</div>
-            <span>{post.author?.username}</span>
+            <span className="author-mini-name">{post.author?.username}</span>
           </Link>
-          <span>
-            {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true })} ·{' '}
-            {post.readTime}m read ·{' '}
-            💬 {post.commentCount || 0}
-          </span>
+          <div className="post-card-meta" aria-label="post meta">
+            <span className="post-card-meta-item">
+              {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true })}
+            </span>
+            <span className="post-card-meta-item">{post.readTime}m read</span>
+            <span className="post-card-meta-item post-card-meta-comments">
+              💬 {post.commentCount || 0}
+            </span>
+          </div>
         </div>
       </div>
     </div>

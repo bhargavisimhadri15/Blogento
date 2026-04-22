@@ -1,156 +1,220 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const User = require('../models/User');
-const { protect, generateToken } = require('../middleware/auth');
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+const { protect } = require("../middleware/auth");
+const Post = require("../models/Post");
+const Comment = require("../models/Comment");
 
-// @route   POST /api/auth/register
-router.post('/register', async (req, res) => {
+const buildUserResponse = (user) => ({
+  _id: user._id,
+  email: user.email,
+  username: user.username,
+  bio: user.bio || "",
+  avatar: user.avatar || "",
+  role: user.role || "user",
+});
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+
+// ================= REGISTER =================
+router.post("/register", async (req, res) => {
   try {
-    const { username, email, password, bio } = req.body;
-    console.log('Register attempt:', email);
+    const username = (req.body.username || "").trim();
+    const email = (req.body.email || "").trim().toLowerCase();
+    const password = req.body.password || "";
+    const bio = (req.body.bio || "").toString().slice(0, 200);
+    const avatar = (req.body.avatar || "").toString();
 
-    if (!username || !email || !password) {
-      return res.status(400).json({ message: 'Username, email and password are required' });
+    const emailRegex = new RegExp(`^${escapeRegex(email)}$`, "i");
+    const userExists = await User.findOne({ $or: [{ email: emailRegex }, { username }] });
+    if (userExists) {
+      return res.status(400).json({ message: "User already exists" });
     }
 
-    if (username.length < 3) {
-      return res.status(400).json({ message: 'Username must be at least 3 characters' });
-    }
+    // 🔥 HASH PASSWORD
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
-    if (password.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
-    }
+    const user = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      bio,
+      avatar,
+    });
 
-    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-    if (existingUser) {
-      return res.status(400).json({
-        message: existingUser.email === email ? 'Email already in use' : 'Username already taken'
-      });
-    }
-
-    const user = await User.create({ username, email, password, bio });
-    const token = generateToken(user._id);
-    console.log('Register success:', user.email);
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     res.status(201).json({
-      message: 'Registration successful',
+      message: "Registered successfully",
       token,
-      user: {
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-        bio: user.bio,
-        avatar: user.avatar,
-        role: user.role,
-        createdAt: user.createdAt
-      }
+      user: buildUserResponse(user),
     });
+
   } catch (error) {
-    console.error('REGISTER ERROR:', error.message);
+    console.error("REGISTER ERROR:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// @route   POST /api/auth/login
-router.post('/login', async (req, res) => {
+
+// ================= LOGIN =================
+router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
-    console.log('Login attempt:', email);
+    const identifier = (req.body.email || "").trim();
+    const email = identifier.toLowerCase();
+    const password = req.body.password || "";
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
+    const emailQuery = identifier.includes("@")
+      ? { $regex: new RegExp(`^${escapeRegex(identifier)}$`, "i") }
+      : email;
 
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ $or: [{ email: emailQuery }, { username: identifier }] });
+
     if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(400).json({ message: "User not found" });
     }
 
-    const isMatch = await user.comparePassword(password);
+    // 🔥 COMPARE HASHED PASSWORD
+    const isMatch = await bcrypt.compare(password, user.password);
+
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(400).json({ message: "Invalid password" });
     }
 
-    const token = generateToken(user._id);
-    console.log('✅ Login success:', user.email);
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     res.json({
-      message: 'Login successful',
+      message: "Login success",
       token,
-      user: {
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-        bio: user.bio,
-        avatar: user.avatar,
-        role: user.role,
-        createdAt: user.createdAt
-      }
+      user: buildUserResponse(user),
     });
+
   } catch (error) {
-    console.error('LOGIN ERROR:', error.message);
+    console.error("LOGIN ERROR:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// @route   GET /api/auth/me
-router.get('/me', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id);
-    res.json({ user });
-  } catch (error) {
-    console.error('ME ERROR:', error.message);
-    res.status(500).json({ message: 'Server error' });
-  }
+// ================= ME =================
+router.get("/me", protect, async (req, res) => {
+  res.json({ user: buildUserResponse(req.user) });
 });
 
-// @route   PUT /api/auth/profile
-router.put('/profile', protect, async (req, res) => {
+// ================= UPDATE PROFILE =================
+router.put("/profile", protect, async (req, res) => {
   try {
-    const { username, bio, avatar } = req.body;
-    const updates = {};
-    if (username) updates.username = username;
-    if (bio !== undefined) updates.bio = bio;
-    if (avatar !== undefined) updates.avatar = avatar;
+    const username = typeof req.body.username === "string" ? req.body.username.trim() : undefined;
+    const bio = typeof req.body.bio === "string" ? req.body.bio.slice(0, 200) : undefined;
+    const avatar = typeof req.body.avatar === "string" ? req.body.avatar : undefined;
 
-    const user = await User.findByIdAndUpdate(
+    const update = {};
+    if (username !== undefined) {
+      if (!username) return res.status(400).json({ message: "Username is required" });
+      if (!/^[A-Za-z0-9_]+$/.test(username)) {
+        return res.status(400).json({ message: "Username can only contain letters, numbers, and underscores" });
+      }
+      const existing = await User.findOne({ username, _id: { $ne: req.user._id } });
+      if (existing) return res.status(400).json({ message: "Username already in use" });
+      update.username = username;
+    }
+
+    if (bio !== undefined) update.bio = bio;
+    if (avatar !== undefined) update.avatar = avatar;
+
+    if (Object.keys(update).length === 0) {
+      return res.json({ message: "Profile updated", user: buildUserResponse(req.user) });
+    }
+
+    const updated = await User.findByIdAndUpdate(
       req.user._id,
-      updates,
+      { $set: update },
       { new: true, runValidators: true }
-    );
-    res.json({ message: 'Profile updated', user });
+    ).select("-password");
+
+    if (!updated) return res.status(404).json({ message: "User not found" });
+
+    return res.json({ message: "Profile updated", user: buildUserResponse(updated) });
   } catch (error) {
-    console.error('PROFILE ERROR:', error.message);
-    res.status(500).json({ message: error.message });
+    console.error("PROFILE UPDATE ERROR:", error);
+    if (error?.code === 11000) {
+      return res.status(400).json({ message: "Username or email already in use" });
+    }
+    if (error?.name === "ValidationError") {
+      return res.status(400).json({ message: error.message });
+    }
+    return res.status(500).json({ message: error.message || "Server error" });
   }
 });
 
-// @route   PUT /api/auth/change-password
-router.put('/change-password', protect, async (req, res) => {
+// ================= CHANGE PASSWORD =================
+router.put("/change-password", protect, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const currentPassword = req.body.currentPassword || "";
+    const newPassword = req.body.newPassword || "";
 
     if (!currentPassword || !newPassword) {
-      return res.status(400).json({ message: 'Both passwords are required' });
+      return res.status(400).json({ message: "Current password and new password are required" });
     }
 
     if (newPassword.length < 6) {
-      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+      return res.status(400).json({ message: "Password must be at least 6 characters" });
     }
 
-    const user = await User.findById(req.user._id).select('+password');
-    const isMatch = await user.comparePassword(currentPassword);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Current password is incorrect' });
-    }
+    const userWithPassword = await User.findById(req.user._id);
+    if (!userWithPassword) return res.status(404).json({ message: "User not found" });
 
-    user.password = newPassword;
-    await user.save();
+    const ok = await bcrypt.compare(currentPassword, userWithPassword.password);
+    if (!ok) return res.status(400).json({ message: "Current password is incorrect" });
 
-    res.json({ message: 'Password changed successfully' });
+    userWithPassword.password = newPassword;
+    await userWithPassword.save();
+
+    res.json({ message: "Password updated" });
   } catch (error) {
-    console.error('PASSWORD ERROR:', error.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error("CHANGE PASSWORD ERROR:", error);
+    return res.status(500).json({ message: error.message || "Server error" });
+  }
+});
+
+// ================= DELETE ACCOUNT =================
+router.delete("/me", protect, async (req, res) => {
+  try {
+    const password = req.body?.password || "";
+    if (!password) {
+      return res.status(400).json({ message: "Password is required to delete your account" });
+    }
+
+    const userWithPassword = await User.findById(req.user._id);
+    if (!userWithPassword) return res.status(404).json({ message: "User not found" });
+
+    const ok = await bcrypt.compare(password, userWithPassword.password);
+    if (!ok) return res.status(400).json({ message: "Password is incorrect" });
+
+    const myPosts = await Post.find({ author: req.user._id }).select("_id");
+    const myPostIds = myPosts.map(p => p._id);
+
+    await Promise.all([
+      Comment.deleteMany({ $or: [{ author: req.user._id }, { post: { $in: myPostIds } }] }),
+      Post.deleteMany({ author: req.user._id }),
+      User.findByIdAndDelete(req.user._id),
+    ]);
+
+    return res.json({ message: "Account deleted" });
+  } catch (error) {
+    console.error("DELETE ACCOUNT ERROR:", error);
+    return res.status(500).json({ message: error.message || "Server error" });
   }
 });
 

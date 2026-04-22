@@ -1,16 +1,67 @@
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:5000/api';
+const resolveApiBase = () => {
+  const envBase = process.env.REACT_APP_API_BASE?.trim();
+  if (envBase) return envBase;
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, port } = window.location;
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:5000/api';
+    }
+
+    if (port && port !== '80' && port !== '443') {
+      return `${protocol}//${hostname}:5000/api`;
+    }
+
+    // For Vercel/public hosting, prefer same-origin `/api` (proxied by `vercel.json`).
+    return '/api';
+  }
+
+  return 'http://localhost:5000/api';
+};
+
+const API_BASE = resolveApiBase();
+const REQUEST_TIMEOUT_MS = 30000;
+
+const getTokenSafely = () => {
+  try {
+    return localStorage.getItem('token');
+  } catch {
+    return null;
+  }
+};
+
+const clearAuthSafely = () => {
+  try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  } catch {
+    // Ignore storage access errors in restricted browser contexts.
+  }
+};
 
 const api = axios.create({
   baseURL: API_BASE,
-  headers: { 'Content-Type': 'application/json' }
+  timeout: REQUEST_TIMEOUT_MS,
 });
 
 // Attach token to every request
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  console.log('Token being sent:', token ? 'YES' : 'NO');
+  const isFormData = typeof FormData !== 'undefined' && config.data instanceof FormData;
+  if (isFormData && config.headers) {
+    // Let the browser set `multipart/form-data; boundary=...`
+    if (typeof config.headers.delete === 'function') {
+      config.headers.delete('Content-Type');
+      config.headers.delete('content-type');
+    } else {
+      delete config.headers['Content-Type'];
+      delete config.headers['content-type'];
+    }
+  }
+
+  const token = getTokenSafely();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -23,10 +74,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.log('API Error:', error.response?.status, error.response?.data?.message);
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      clearAuthSafely();
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -39,7 +88,8 @@ export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   getMe: () => api.get('/auth/me'),
   updateProfile: (data) => api.put('/auth/profile', data),
-  changePassword: (data) => api.put('/auth/change-password', data)
+  changePassword: (data) => api.put('/auth/change-password', data),
+  deleteAccount: (data) => api.delete('/auth/me', { data })
 };
 
 // Posts
@@ -52,7 +102,7 @@ export const postsAPI = {
   delete: (id) => api.delete(`/posts/${id}`),
   like: (id) => api.post(`/posts/${id}/like`),
   uploadImage: (formData) => api.post('/posts/upload-image', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    timeout: 60000
   })
 };
 

@@ -3,12 +3,29 @@ import { authAPI } from '../utils/api';
 
 const AuthContext = createContext(null);
 
+const getStoredToken = () => {
+  try {
+    return localStorage.getItem('token');
+  } catch {
+    return null;
+  }
+};
+
+const clearStoredAuth = () => {
+  try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  } catch {
+    // Ignore storage access errors in restricted browser contexts.
+  }
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const loadUser = useCallback(async () => {
-    const token = localStorage.getItem('token');
+    const token = getStoredToken();
     if (!token) {
       setLoading(false);
       return;
@@ -17,8 +34,7 @@ export const AuthProvider = ({ children }) => {
       const { data } = await authAPI.getMe();
       setUser(data.user);
     } catch {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      clearStoredAuth();
     } finally {
       setLoading(false);
     }
@@ -28,20 +44,28 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (credentials) => {
     const { data } = await authAPI.login(credentials);
-    localStorage.setItem('token', data.token);
+    try {
+      localStorage.setItem('token', data.token);
+    } catch {
+      // If storage is blocked, user stays logged in for this session state only.
+    }
     setUser(data.user);
     return data;
   };
 
   const register = async (userData) => {
     const { data } = await authAPI.register(userData);
-    localStorage.setItem('token', data.token);
+    try {
+      localStorage.setItem('token', data.token);
+    } catch {
+      // If storage is blocked, user stays logged in for this session state only.
+    }
     setUser(data.user);
     return data;
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    clearStoredAuth();
     setUser(null);
   };
 

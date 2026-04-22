@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Comment = require('../models/Comment');
 const Post = require('../models/Post');
 const { protect } = require('../middleware/auth');
@@ -9,8 +10,17 @@ const { protect } = require('../middleware/auth');
 // @access  Public
 router.get('/post/:postId', async (req, res) => {
   try {
+    const identifier = req.params.postId;
+    let postId = identifier;
+
+    if (!mongoose.Types.ObjectId.isValid(identifier)) {
+      const post = await Post.findOne({ slug: identifier }).select('_id');
+      if (!post) return res.json({ comments: [] });
+      postId = post._id;
+    }
+
     const comments = await Comment.find({
-      post: req.params.postId,
+      post: postId,
       parentComment: null
     })
       .populate('author', 'username avatar')
@@ -28,7 +38,10 @@ router.get('/post/:postId', async (req, res) => {
 
     res.json({ comments: commentsWithReplies });
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    if (error?.name === 'CastError') {
+      return res.json({ comments: [] });
+    }
+    return res.status(500).json({ message: 'Server error' });
   }
 });
 

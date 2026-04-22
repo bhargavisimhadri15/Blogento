@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { postsAPI } from '../utils/api';
 import toast from 'react-hot-toast';
+import { compressImageFile } from '../utils/image';
 
 const CATEGORIES = ['Technology', 'Design', 'Business', 'Lifestyle', 'Travel', 'Food', 'Health', 'Other'];
 
@@ -25,15 +26,49 @@ export default function CreatePost() {
     setUploadingImage(true);
 
     try {
+      const toastId = toast.loading('Optimizing image...');
+      let uploadFile = file;
+      let compressCode = 'skip';
+      try {
+        const result = await compressImageFile(file, { maxWidth: 1600, maxHeight: 1600, maxBytes: 1_800_000 });
+        uploadFile = result.file || file;
+        compressCode = result.code || 'skip';
+      } finally {
+        toast.dismiss(toastId);
+      }
+
+      const HARD_MAX_BYTES = 5 * 1024 * 1024;
+      const PUBLIC_MAX_BYTES = 2 * 1024 * 1024;
+
+      if (compressCode === 'decode_failed') {
+        const isHeic = /heic|heif/i.test(file.type) || /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name);
+        if (isHeic) {
+          throw new Error('HEIC images are not supported on some devices. Please change camera to JPEG/PNG (Most Compatible) or choose another image.');
+        }
+      }
+
+      if (uploadFile.size > HARD_MAX_BYTES) {
+        throw new Error('Image is too large (max 5MB). Please choose a smaller image.');
+      }
+      if (uploadFile.size > PUBLIC_MAX_BYTES) {
+        throw new Error('Image is still too large for the public site (max ~2MB). Please choose a smaller image.');
+      }
+
       const formData = new FormData();
-      formData.append('image', file);
+      formData.append('image', uploadFile);
 
       const { data } = await postsAPI.uploadImage(formData);
       setForm(prev => ({ ...prev, coverImage: data.url }));
-      toast.success('Image uploaded successfully');
+      toast.success(data.storage === 'inline' ? 'Image uploaded (optimized)' : 'Image uploaded successfully');
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to upload image');
-      toast.error(err.response?.data?.message || 'Failed to upload image');
+      const message =
+        err.response?.data?.message ||
+        (err.code === 'ECONNABORTED' ? 'Upload timed out. Please try a smaller image or a faster network.' : null) ||
+        (err.message === 'Network Error' ? 'Network error while uploading. Please check your connection and try again.' : null) ||
+        err.message ||
+        'Failed to upload image';
+      setError(message);
+      toast.error(message);
     } finally {
       setUploadingImage(false);
       e.target.value = '';
@@ -114,7 +149,7 @@ export default function CreatePost() {
               </div>
 
               <div className="form-group">
-                <label>Upload Cover Image <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional, max 5MB)</span></label>
+                <label>Upload Cover Image <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional, auto-optimized for mobile)</span></label>
                 <input
                   className="form-control"
                   type="file"

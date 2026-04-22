@@ -2,240 +2,294 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
 const multer = require('multer');
 const streamifier = require('streamifier');
 const { v2: cloudinary } = require('cloudinary');
 const Post = require('../models/Post');
 const Comment = require('../models/Comment');
-const { protect, optionalAuth, adminOnly } = require('../middleware/auth');
+const { protect, optionalAuth } = require('../middleware/auth');
 
+
+// =======================
+// 🔐 HELPERS
+// =======================
 const isOwner = (user, author) => {
   if (!user) return false;
-
-  const userId = user._id ? user._id.toString() : '';
-  const authorId = author && author._id ? author._id.toString() : (author ? author.toString() : '');
-  return Boolean(userId && authorId && userId === authorId);
+  return user._id?.toString() === author?.toString();
 };
 
-const isAdmin = (user) => Boolean(user && user.role === 'admin');
+const isAdmin = (user) => user?.role === 'admin';
 
-const cloudinaryCloudName = process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUD_NAME;
-const cloudinaryApiKey = process.env.CLOUDINARY_API_KEY || process.env.CLOUD_API_KEY;
-const cloudinaryApiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLOUD_API_SECRET;
-const cloudinaryConfigured = Boolean(cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret);
 
+// =======================
+// ☁️ CLOUDINARY CONFIG
+// =======================
 cloudinary.config({
-  cloud_name: cloudinaryCloudName,
-  api_key: cloudinaryApiKey,
-  api_secret: cloudinaryApiSecret
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.CLOUD_API_KEY,
+  api_secret: process.env.CLOUD_API_SECRET
 });
 
+
+// =======================
+// 📦 MULTER CONFIG
+// =======================
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype && file.mimetype.startsWith('image/')) {
-      return cb(null, true);
-    }
-    cb(new Error('Only image files are allowed'));
-  }
 });
 
-const uploadImageMiddleware = (req, res, next) => {
-  upload.single('image')(req, res, (error) => {
-    if (!error) return next();
 
-    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ message: 'Image must be 5MB or less' });
-    }
+// =======================
+// 🖼️ IMAGE UPLOAD
+// =======================
+const getBaseUrl = (req) => `${req.protocol}://${req.get('host')}`;
 
-    return res.status(400).json({ message: error.message || 'Invalid image upload' });
-  });
-};
-
-const uploadToCloudinary = (buffer, originalname) => {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        folder: 'blogento/posts',
-        resource_type: 'image',
-        use_filename: true,
-        unique_filename: true,
-        filename_override: originalname ? originalname.split('.').slice(0, -1).join('.') : undefined
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      }
-    );
-
-    streamifier.createReadStream(buffer).pipe(uploadStream);
-  });
-};
-
-const getImageExtension = (file) => {
+const inferImageExtension = (file) => {
   const extFromName = path.extname(file.originalname || '').toLowerCase();
-  if (extFromName) return extFromName;
+  if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'].includes(extFromName)) return extFromName;
 
-  const mimeToExt = {
+  const byMime = {
     'image/jpeg': '.jpg',
     'image/png': '.png',
     'image/webp': '.webp',
     'image/gif': '.gif',
-    'image/svg+xml': '.svg',
-    'image/avif': '.avif'
+    'image/avif': '.avif',
   };
-  return mimeToExt[file.mimetype] || '.jpg';
+
+  return byMime[file.mimetype] || '.jpg';
 };
 
-const saveImageLocally = async (file) => {
-  const uploadDir = path.join(__dirname, '..', 'uploads', 'posts');
-  await fs.promises.mkdir(uploadDir, { recursive: true });
+const writeImageToUploads = async (req, file) => {
+  const uploadsDir = path.join(__dirname, '..', 'uploads', 'images');
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
 
-  const originalBase = path.basename(file.originalname || 'image', path.extname(file.originalname || ''));
-  const safeBase = (originalBase || 'image')
-    .replace(/[^a-zA-Z0-9-_]/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 50);
-  const filename = `${Date.now()}-${safeBase}${getImageExtension(file)}`;
-  const filePath = path.join(uploadDir, filename);
+  const ext = inferImageExtension(file);
+  const name = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+  const diskPath = path.join(uploadsDir, name);
 
-  await fs.promises.writeFile(filePath, file.buffer);
-  return `/uploads/posts/${filename}`;
+  await fs.promises.writeFile(diskPath, file.buffer);
+
+  return {
+    url: `${getBaseUrl(req)}/uploads/images/${name}`,
+    storage: 'local',
+  };
 };
 
-router.post('/upload-image', protect, uploadImageMiddleware, async (req, res) => {
+const canUseCloudinary = () => Boolean(process.env.CLOUD_NAME && process.env.CLOUD_API_KEY && process.env.CLOUD_API_SECRET);
+
+const uploadToCloudinary = (buffer, folder) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+    streamifier.createReadStream(buffer).pipe(stream);
+  });
+};
+
+router.post('/upload-image', protect, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'Image file is required' });
+      return res.status(400).json({ message: 'Image required' });
     }
 
-    if (cloudinaryConfigured) {
+    if (!req.file.mimetype?.startsWith('image/')) {
+      return res.status(400).json({ message: 'Only image files are allowed' });
+    }
+
+    const folder = req.body?.folder === 'avatars' ? 'avatars' : 'posts';
+
+    if (canUseCloudinary()) {
       try {
-        const uploaded = await uploadToCloudinary(req.file.buffer, req.file.originalname);
+        const result = await uploadToCloudinary(req.file.buffer, folder);
         return res.status(201).json({
-          message: 'Image uploaded successfully',
-          url: uploaded.secure_url,
-          publicId: uploaded.public_id,
-          storage: 'cloudinary'
+          message: 'Uploaded',
+          url: result.secure_url,
+          storage: 'cloudinary',
         });
-      } catch (cloudinaryError) {
-        console.error('UPLOAD IMAGE CLOUDINARY ERROR:', cloudinaryError.message);
+      } catch (cloudErr) {
+        console.error('CLOUDINARY UPLOAD ERROR:', cloudErr?.message || cloudErr);
       }
     }
 
-    const localPath = await saveImageLocally(req.file);
-    const localUrl = `${req.protocol}://${req.get('host')}${localPath}`;
+    const local = await writeImageToUploads(req, req.file);
+    return res.status(201).json({
+      message: 'Uploaded',
+      url: local.url,
+      storage: local.storage,
+    });
 
-    res.status(201).json({
-      message: cloudinaryConfigured
-        ? 'Image uploaded successfully (local fallback)'
-        : 'Image uploaded successfully',
-      url: localUrl,
-      storage: 'local'
-    });
   } catch (error) {
-    console.error('UPLOAD IMAGE ERROR:', error.message);
-    res.status(500).json({
-      message: process.env.NODE_ENV === 'development'
-        ? `Failed to upload image: ${error.message}`
-        : 'Failed to upload image'
-    });
+    console.error("UPLOAD ERROR:", error);
+    res.status(500).json({ message: error.message });
   }
 });
 
-// GET all posts
+
+// =======================
+// 📌 GET ALL POSTS
+// =======================
 router.get('/', optionalAuth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 9;
     const skip = (page - 1) * limit;
 
     const query = { status: 'published' };
-    if (req.query.search) query.$text = { $search: req.query.search };
-    if (req.query.category) query.category = req.query.category;
-    if (req.query.tag) query.tags = req.query.tag;
-    if (req.query.author) query.author = req.query.author;
+
+    if (req.query.search) {
+      query.$text = { $search: req.query.search };
+    }
 
     const sortOptions = {
       newest: { createdAt: -1 },
       oldest: { createdAt: 1 },
-      popular: { views: -1 },
-      liked: { likes: -1 }
+      popular: { views: -1 }
     };
+
     const sort = sortOptions[req.query.sort] || { createdAt: -1 };
 
-    const [posts, total] = await Promise.all([
-      Post.find(query)
-        .populate('author', 'username avatar bio')
-        .populate('commentCount')
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .select('-content'),
-      Post.countDocuments(query)
-    ]);
+    const posts = await Post.find(query)
+      .populate('author', 'username avatar')
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .select('-content');
+
+    const total = await Post.countDocuments(query);
 
     res.json({
       posts,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(total / limit),
-        totalPosts: total,
-        hasNext: page < Math.ceil(total / limit),
-        hasPrev: page > 1
-      }
+      total,
+      page,
+      pages: Math.ceil(total / limit)
     });
+
   } catch (error) {
-    console.error('GET POSTS ERROR:', error.message);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error("GET POSTS ERROR:", error);
+    res.status(500).json({ message: error.message });
   }
 });
 
-// GET my posts
+
+// =======================
+// 👤 MY POSTS
+// =======================
 router.get('/my-posts', protect, async (req, res) => {
   try {
     const posts = await Post.find({ author: req.user._id })
-      .populate('commentCount')
       .sort({ createdAt: -1 });
+
     res.json({ posts });
+
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    console.error("MY POSTS ERROR:", error);
+    res.status(500).json({ message: error.message });
   }
 });
 
-// GET single post
+
+// =======================
+// 📄 SINGLE POST
+// =======================
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
-    const query = req.params.id.match(/^[0-9a-fA-F]{24}$/)
-      ? { _id: req.params.id }
-      : { slug: req.params.id };
+    const identifier = req.params.id;
+    const query = mongoose.Types.ObjectId.isValid(identifier)
+      ? { _id: identifier }
+      : { slug: identifier };
 
     const post = await Post.findOne(query)
-      .populate('author', 'username avatar bio createdAt')
-      .populate('commentCount');
+      .populate('author', 'username avatar bio');
 
     if (!post) {
       return res.status(404).json({ message: 'Post not found' });
     }
 
-    if (post.status === 'draft' && !(isOwner(req.user, post.author) || isAdmin(req.user))) {
-      return res.status(403).json({ message: 'You are not allowed to view this draft' });
+    if (post.status === 'draft') {
+      const owner = isOwner(req.user, post.author?._id || post.author);
+      if (!owner && !isAdmin(req.user)) {
+        return res.status(404).json({ message: 'Post not found' });
+      }
     }
 
     await Post.findByIdAndUpdate(post._id, { $inc: { views: 1 } });
 
     res.json({ post });
+
   } catch (error) {
-    console.error('GET POST ERROR:', error.message);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error("GET POST ERROR:", error);
+    if (error?.name === 'CastError') {
+      return res.status(404).json({ message: 'Post not found' });
+    }
+    return res.status(500).json({ message: error.message });
   }
 });
 
-// CREATE post
+
+// =======================
+// â¤ï¸ LIKE / UNLIKE POST
+// =======================
+router.post('/:id/like', protect, async (req, res) => {
+  try {
+    const identifier = req.params.id;
+    const query = mongoose.Types.ObjectId.isValid(identifier)
+      ? { _id: identifier }
+      : { slug: identifier };
+
+    const post = await Post.findOne(query);
+    if (!post) return res.status(404).json({ message: 'Post not found' });
+
+    if (post.status === 'draft') {
+      const owner = isOwner(req.user, post.author);
+      if (!owner && !isAdmin(req.user)) {
+        return res.status(404).json({ message: 'Post not found' });
+      }
+    }
+
+    const userId = req.user._id;
+    const alreadyLiked = post.likes?.some(id => `${id}` === `${userId}`);
+    if (alreadyLiked) {
+      post.likes.pull(userId);
+    } else {
+      post.likes.push(userId);
+    }
+    await post.save();
+
+    return res.json({
+      liked: !alreadyLiked,
+      likesCount: post.likes.length,
+    });
+  } catch (error) {
+    console.error('LIKE ERROR:', error);
+    if (error?.name === 'CastError') {
+      return res.status(404).json({ message: 'Post not found' });
+    }
+    return res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+
+// =======================
+// ➕ CREATE POST
+// =======================
 router.post('/', protect, async (req, res) => {
   try {
-    const { title, content, excerpt, coverImage, tags, category, status } = req.body;
+    const {
+      title,
+      content,
+      excerpt,
+      coverImage,
+      tags,
+      category,
+      status,
+    } = req.body || {};
 
     if (!title || !content) {
       return res.status(400).json({ message: 'Title and content are required' });
@@ -246,86 +300,73 @@ router.post('/', protect, async (req, res) => {
       content,
       excerpt,
       coverImage,
-      tags: tags ? tags.map(t => t.toLowerCase().trim()) : [],
-      category: category || 'Other',
-      status: status || 'published',
-      author: req.user._id
+      tags,
+      category,
+      status,
+      author: req.user._id,
     });
 
-    await post.populate('author', 'username avatar');
-    res.status(201).json({ message: 'Post created successfully', post });
+    res.status(201).json({ post });
+
   } catch (error) {
-    console.error('CREATE POST ERROR:', error.message);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error("CREATE ERROR:", error);
+    res.status(500).json({ message: error.message });
   }
 });
 
-// UPDATE post — allow any logged in user
-router.put('/:id', protect, adminOnly, async (req, res) => {
+
+// =======================
+// ✏️ UPDATE POST
+// =======================
+router.put('/:id', protect, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
-    if (!post) {
-      return res.status(404).json({ message: 'Post not found' });
+
+    if (!post) return res.status(404).json({ message: "Not found" });
+
+    if (!isOwner(req.user, post.author)) {
+      return res.status(403).json({ message: "Not allowed" });
     }
-    const { title, content, excerpt, coverImage, tags, category, status } = req.body;
 
-    if (title !== undefined) post.title = title;
-    if (content !== undefined) post.content = content;
-    if (excerpt !== undefined) post.excerpt = excerpt;
-    if (coverImage !== undefined) post.coverImage = coverImage;
-    if (tags !== undefined) post.tags = tags.map(t => t.toLowerCase().trim());
-    if (category !== undefined) post.category = category;
-    if (status !== undefined) post.status = status;
-
-    await post.save();
-    await post.populate('author', 'username avatar');
-
-    console.log('✅ Post updated:', post._id);
-    res.json({ message: 'Post updated successfully', post });
-  } catch (error) {
-    console.error('UPDATE POST ERROR:', error.message);
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-});
-
-// DELETE post — allow any logged in user
-router.delete('/:id', protect, adminOnly, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
-    if (!post) {
-      return res.status(404).json({ message: 'Post not found' });
-    }
-    await Promise.all([
-      Post.findByIdAndDelete(req.params.id),
-      Comment.deleteMany({ post: req.params.id })
-    ]);
-
-    console.log('✅ Post deleted:', req.params.id);
-    res.json({ message: 'Post deleted successfully' });
-  } catch (error) {
-    console.error('DELETE POST ERROR:', error.message);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// LIKE post
-router.post('/:id/like', protect, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
-    if (!post) return res.status(404).json({ message: 'Post not found' });
-
-    const liked = post.likes.includes(req.user._id);
-    if (liked) {
-      post.likes.pull(req.user._id);
-    } else {
-      post.likes.push(req.user._id);
+    const allowed = ['title', 'content', 'excerpt', 'coverImage', 'tags', 'category', 'status'];
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
+        post[key] = req.body[key];
+      }
     }
     await post.save();
 
-    res.json({ liked: !liked, likesCount: post.likes.length });
+    res.json({ post });
+
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    console.error("UPDATE ERROR:", error);
+    res.status(500).json({ message: error.message });
   }
 });
+
+
+// =======================
+// ❌ DELETE POST
+// =======================
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+
+    if (!post) return res.status(404).json({ message: "Not found" });
+
+    if (!isOwner(req.user, post.author)) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
+
+    await Post.findByIdAndDelete(req.params.id);
+
+    res.json({ message: "Deleted" });
+
+  } catch (error) {
+    console.error("DELETE ERROR:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 
 module.exports = router;
