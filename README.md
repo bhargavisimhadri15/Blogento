@@ -119,6 +119,28 @@ docker-compose up --build
 
 ---
 
+## Deploy on Vercel
+
+### Option A (Recommended): Single Vercel Project (Frontend + /api)
+
+1. In Vercel, import the repo and set **Root Directory** to `blogapp/`.
+2. Add backend env vars (Project → Settings → Environment Variables):
+   - `MONGO_URI`
+   - `JWT_SECRET`
+   - `CLOUD_NAME`, `CLOUD_API_KEY`, `CLOUD_API_SECRET` (required for image uploads on Vercel)
+3. Deploy.
+
+### Option B: Two Vercel Projects (Frontend + Backend)
+
+Backend:
+- Root Directory: `blogapp/backend/`
+- Env vars: `MONGO_URI`, `JWT_SECRET`, `CLOUD_NAME`, `CLOUD_API_KEY`, `CLOUD_API_SECRET`
+
+Frontend:
+- Root Directory: `blogapp/frontend/`
+- Env var: `REACT_APP_API_BASE=https://<backend>.vercel.app/api`
+- Deploy
+
 ## ðŸ”Œ API Reference
 
 ### Auth
@@ -129,6 +151,7 @@ docker-compose up --build
 | GET | /api/auth/me | Private | Get current user |
 | PUT | /api/auth/profile | Private | Update profile |
 | PUT | /api/auth/change-password | Private | Change password |
+| DELETE | /api/auth/me | Private | Delete account |
 
 ### Posts
 | Method | Endpoint | Access | Description |
